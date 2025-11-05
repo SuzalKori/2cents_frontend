@@ -40,13 +40,19 @@ export const useBinanceSocket = (symbol: string = 'btcusdt') => {
         fetch(`https://api.binance.com/api/v3/depth?symbol=${symbol.toUpperCase()}&limit=100`)
           .then(res => res.json())
           .then(data => {
-            const bids = new Map(data.bids.map(([p, q]: [string, string]) => [p, q]));
-            const asks = new Map(data.asks.map(([p, q]: [string, string]) => [p, q]));
-            setOrderBook({
-              bids,
-              asks,
-              lastUpdateId: data.lastUpdateId,
-            });
+            const bids: Map<string, string> = new Map<string, string>(
+  (data.bids as [string, string][]).map(([p, q]) => [p, q])
+);
+const asks: Map<string, string> = new Map<string, string>(
+  (data.asks as [string, string][]).map(([p, q]) => [p, q])
+);
+
+setOrderBook({
+  bids,
+  asks,
+  lastUpdateId: data.lastUpdateId,
+});
+
           })
           .catch(err => console.error('Failed to fetch initial order book:', err));
       };
@@ -131,4 +137,5 @@ export const useBinanceSocket = (symbol: string = 'btcusdt') => {
   }, [connect]);
 
   return { trades, orderBook, connected };
+
 };
