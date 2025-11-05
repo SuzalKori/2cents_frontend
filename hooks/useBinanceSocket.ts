@@ -29,7 +29,7 @@ export const useBinanceSocket = (symbol: string = 'btcusdt') => {
     try {
       // Combined stream for trades and depth updates
       const ws = new WebSocket(
-        'wss://stream.binance.com:9443/stream?streams=btcusdt@aggTrade/btcusdt@depth'
+        'wss://stream.binance.com/ws/btcusdt@aggTrade'
       );
 
       ws.onopen = () => {
@@ -139,6 +139,7 @@ setOrderBook({
   return { trades, orderBook, connected };
 
 };
+
 
 
 
