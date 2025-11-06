@@ -22,125 +22,200 @@ export const useBinanceSocket = (symbol: string = 'btcusdt') => {
     lastUpdateId: 0,
   });
   const [connected, setConnected] = useState(false);
-  const wsRef = useRef<WebSocket | null>(null);
+  const wsTradeRef = useRef<WebSocket | null>(null);
+  const wsDepthRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout>();
+  const connectionAttemptsRef = useRef(0);
 
   const connect = useCallback(() => {
-    try {
-      // Combined stream for trades and depth updates
-      const ws = new WebSocket(
-        'wss://data-stream.binance.vision/stream?streams=btcusdt@aggTrade/btcusdt@depth'
-      );
+    connectionAttemptsRef.current += 1;
+    console.log(`Connection attempt #${connectionAttemptsRef.current}`);
 
-      ws.onopen = () => {
-        console.log('WebSocket connected');
-        setConnected(true);
+    try {
+      // Close existing connections
+      if (wsTradeRef.current) {
+        wsTradeRef.current.close();
+      }
+      if (wsDepthRef.current) {
+        wsDepthRef.current.close();
+      }
+
+      // Try the alternative endpoint without port specification
+      const tradeUrl = `wss://stream.binance.com/ws/${symbol}@aggTrade`;
+      const depthUrl = `wss://stream.binance.com/ws/${symbol}@depth@100ms`;
+
+      console.log('Connecting to:', tradeUrl);
+      console.log('Connecting to:', depthUrl);
+
+      const wsTrade = new WebSocket(tradeUrl);
+      const wsDepth = new WebSocket(depthUrl);
+
+      let tradeConnected = false;
+      let depthConnected = false;
+
+      const updateConnectionStatus = () => {
+        const isConnected = tradeConnected && depthConnected;
+        setConnected(isConnected);
+        console.log(`Connection status - Trade: ${tradeConnected}, Depth: ${depthConnected}`);
+      };
+
+      wsTrade.onopen = () => {
+        console.log('✓ Trade WebSocket connected');
+        tradeConnected = true;
+        updateConnectionStatus();
+      };
+
+      wsDepth.onopen = () => {
+        console.log('✓ Depth WebSocket connected');
+        depthConnected = true;
+        updateConnectionStatus();
         
         // Fetch initial order book snapshot
+        console.log('Fetching initial order book snapshot...');
         fetch(`https://api.binance.com/api/v3/depth?symbol=${symbol.toUpperCase()}&limit=100`)
-          .then(res => res.json())
-          .then(data => {
-            const bids: Map<string, string> = new Map<string, string>(
-  (data.bids as [string, string][]).map(([p, q]) => [p, q])
-);
-const asks: Map<string, string> = new Map<string, string>(
-  (data.asks as [string, string][]).map(([p, q]) => [p, q])
-);
-
-setOrderBook({
-  bids,
-  asks,
-  lastUpdateId: data.lastUpdateId,
-});
-
+          .then(res => {
+            if (!res.ok) {
+              throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+            }
+            return res.json();
           })
-          .catch(err => console.error('Failed to fetch initial order book:', err));
-      };
+          .then(data => {
+            console.log('✓ Order book snapshot received');
+            const bids = new Map<string, string>(
+              (data.bids as [string, string][]).map(([p, q]) => [p, q])
+            );
+            const asks = new Map<string, string>(
+              (data.asks as [string, string][]).map(([p, q]) => [p, q])
+            );
 
-      ws.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-
-        // Handle aggregate trade updates
-        if (data.e === 'aggTrade') {
-          const trade: Trade = {
-            id: data.a.toString(),
-            price: data.p,
-            quantity: data.q,
-            time: data.T,
-            isBuyerMaker: data.m,
-          };
-          setTrades(prev => [trade, ...prev.slice(0, 49)]);
-        }
-
-        // Handle depth updates
-        if (data.e === 'depthUpdate') {
-          setOrderBook(prev => {
-            const newBids = new Map(prev.bids);
-            const newAsks = new Map(prev.asks);
-
-            // Update bids
-            data.b.forEach(([price, quantity]: [string, string]) => {
-              if (parseFloat(quantity) === 0) {
-                newBids.delete(price);
-              } else {
-                newBids.set(price, quantity);
-              }
+            setOrderBook({
+              bids,
+              asks,
+              lastUpdateId: data.lastUpdateId,
             });
-
-            // Update asks
-            data.a.forEach(([price, quantity]: [string, string]) => {
-              if (parseFloat(quantity) === 0) {
-                newAsks.delete(price);
-              } else {
-                newAsks.set(price, quantity);
-              }
-            });
-
-            return {
-              bids: newBids,
-              asks: newAsks,
-              lastUpdateId: data.u,
-            };
+          })
+          .catch(err => {
+            console.error('✗ Failed to fetch initial order book:', err.message);
           });
+      };
+
+      wsTrade.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+
+          if (data.e === 'aggTrade') {
+            const trade: Trade = {
+              id: data.a.toString(),
+              price: data.p,
+              quantity: data.q,
+              time: data.T,
+              isBuyerMaker: data.m,
+            };
+            setTrades(prev => [trade, ...prev.slice(0, 49)]);
+          }
+        } catch (error) {
+          console.error('Error parsing trade message:', error);
         }
       };
 
-      ws.onerror = (error) => {
-        console.error('WebSocket error:', error);
+      wsDepth.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+
+          if (data.e === 'depthUpdate') {
+            setOrderBook(prev => {
+              const newBids = new Map(prev.bids);
+              const newAsks = new Map(prev.asks);
+
+              data.b.forEach(([price, quantity]: [string, string]) => {
+                if (parseFloat(quantity) === 0) {
+                  newBids.delete(price);
+                } else {
+                  newBids.set(price, quantity);
+                }
+              });
+
+              data.a.forEach(([price, quantity]: [string, string]) => {
+                if (parseFloat(quantity) === 0) {
+                  newAsks.delete(price);
+                } else {
+                  newAsks.set(price, quantity);
+                }
+              });
+
+              return {
+                bids: newBids,
+                asks: newAsks,
+                lastUpdateId: data.u,
+              };
+            });
+          }
+        } catch (error) {
+          console.error('Error parsing depth message:', error);
+        }
       };
 
-      ws.onclose = () => {
-        console.log('WebSocket disconnected');
-        setConnected(false);
-        // Attempt reconnect after 3 seconds
-        reconnectTimeoutRef.current = setTimeout(connect, 3000);
+      wsTrade.onerror = (error) => {
+        console.error('✗ Trade WebSocket error:', error);
+        tradeConnected = false;
+        updateConnectionStatus();
       };
 
-      wsRef.current = ws;
+      wsDepth.onerror = (error) => {
+        console.error('✗ Depth WebSocket error:', error);
+        depthConnected = false;
+        updateConnectionStatus();
+      };
+
+      wsTrade.onclose = (event) => {
+        console.log(`✗ Trade WebSocket closed. Code: ${event.code}, Reason: ${event.reason || 'none'}`);
+        tradeConnected = false;
+        updateConnectionStatus();
+        
+        // Retry connection
+        if (connectionAttemptsRef.current < 5) {
+          console.log('Retrying in 5 seconds...');
+          reconnectTimeoutRef.current = setTimeout(connect, 5000);
+        } else {
+          console.error('Max connection attempts reached. Please check your network/firewall settings.');
+        }
+      };
+
+      wsDepth.onclose = (event) => {
+        console.log(`✗ Depth WebSocket closed. Code: ${event.code}, Reason: ${event.reason || 'none'}`);
+        depthConnected = false;
+        updateConnectionStatus();
+      };
+
+      wsTradeRef.current = wsTrade;
+      wsDepthRef.current = wsDepth;
+
     } catch (error) {
       console.error('Connection error:', error);
-      reconnectTimeoutRef.current = setTimeout(connect, 3000);
+      setConnected(false);
+      
+      if (connectionAttemptsRef.current < 5) {
+        reconnectTimeoutRef.current = setTimeout(connect, 5000);
+      }
     }
   }, [symbol]);
 
   useEffect(() => {
+    connectionAttemptsRef.current = 0;
     connect();
 
     return () => {
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
-      if (wsRef.current) {
-        wsRef.current.close();
+      if (wsTradeRef.current) {
+        wsTradeRef.current.close();
+      }
+      if (wsDepthRef.current) {
+        wsDepthRef.current.close();
       }
     };
   }, [connect]);
 
   return { trades, orderBook, connected };
-
 };
-
-
-
-
-
