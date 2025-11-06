@@ -18,7 +18,7 @@ A high-performance, real-time stock order book visualizer built with Next.js, Ty
 - **API**: Binance WebSocket API
 - **State Management**: React Hooks (useState, useEffect, useMemo, useCallback)
 
-## Deployement : 
+## Deployment : 
 https://2cents-frontend.vercel.app/
 
 ## Installation
@@ -94,3 +94,4 @@ Or manually:
 
 
 MIT
+
